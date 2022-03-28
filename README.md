@@ -1,6 +1,6 @@
 # Breakout written in Swift using Metal
 
-This is a port of the Breakout game in [Joey de Vris](http://joeydevries.com/#home) excellent [LearnOpenGL](https://learnopengl.com) site. Ported to Swift and rendered using Metal
+This is a port of the Breakout game in [Joey de Vris](https://twitter.com/JoeyDeVriez.) excellent [LearnOpenGL](https://learnopengl.com) site. Ported to Swift and rendered using Metal
 
 ## Changes from original
 
