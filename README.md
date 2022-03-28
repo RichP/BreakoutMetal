@@ -1,6 +1,6 @@
 # Breakout written in Swift using Metal
 
-This is a port of the Breakout game in [Joey de Vris](http://joeydevries.com/#home) [LearnOpenGL](https://learnopengl.com) site. Ported to Swift and rendered using Metal
+This is a port of the Breakout game in [Joey de Vris](http://joeydevries.com/#home) excellent [LearnOpenGL](https://learnopengl.com) site. Ported to Swift and rendered using Metal
 
 ## Changes from original
 
@@ -13,5 +13,11 @@ This is a port of the Breakout game in [Joey de Vris](http://joeydevries.com/#ho
 - Text glyphs and font image are generated using Core Text rather than FreeType
 
 - Audio is played (badly) using AVAudioPlayer instead of Irrklang
+
+
+
+
+![appletv-simulator](gifs/appletv.gif)
+
 
 
