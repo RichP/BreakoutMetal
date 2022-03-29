@@ -11,7 +11,7 @@ import MetalKit
 // Our iOS specific view controller
 class GameViewController: UIViewController {
 
-    var renderer: Renderer!
+    var renderer: Game!
     var mtkView: MTKView!
 
     override func viewDidLoad() {
@@ -31,7 +31,7 @@ class GameViewController: UIViewController {
         mtkView.device = defaultDevice
         mtkView.backgroundColor = UIColor.black
 
-        guard let newRenderer = Renderer(metalKitView: mtkView) else {
+        guard let newRenderer = Game(metalKitView: mtkView) else {
             print("Renderer cannot be initialized")
             return
         }

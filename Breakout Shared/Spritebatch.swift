@@ -31,13 +31,13 @@ class SpriteBatch {
         texture = spriteTexture
         widthRatio = 1.0 / Float(spriteTexture.width)
         heightRatio = 1.0 / Float(spriteTexture.height)
-        pipeline = SpriteBatch.renderPipeline(device: Renderer.device)
-        sampler = SpriteBatch.buildSamplerState(device: Renderer.device)
+        pipeline = SpriteBatch.renderPipeline(device: Game.device)
+        sampler = SpriteBatch.buildSamplerState(device: Game.device)
         
         if let sheetName = sheetName {
             spriteSheet = SpriteSheet(name: sheetName)
         }
-        vertexBuffer = Renderer.device.makeBuffer(length: defaultBatchSize * floatSize, options: [])
+        vertexBuffer = Game.device.makeBuffer(length: defaultBatchSize * floatSize, options: [])
     }
     
     func draw(dest: Rectangle) {

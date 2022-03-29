@@ -27,7 +27,8 @@ class SoundEngine {
             }
         }
         
-        if let effect = effect, !effect.isPlaying {
+        if let effect = effect {
+            effect.stop()
             effect.numberOfLoops = loop ? -1 : 1
             effect.play()
             sounds[file] = effect

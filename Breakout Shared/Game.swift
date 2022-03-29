@@ -1,12 +1,19 @@
 //
-//  Game.swift
-//  Breakout
+//  Renderer.swift
+//  Breakout Shared
 //
-//  Created by Richard Pickup on 15/03/2022.
+//  Created by Richard Pickup on 14/03/2022.
 //
 
-import Foundation
+// Our platform independent renderer class
+
+import Metal
+import MetalKit
 import GameController
+import simd
+
+// The 256 byte aligned size of our uniform structure
+let alignedUniformsSize = (MemoryLayout<Uniforms>.size + 0xFF) & -0x100
 
 enum GameState {
     case active
@@ -14,36 +21,19 @@ enum GameState {
     case win
 }
 
-enum Direction: Int {
-    case up
-    case right
-    case down
-    case left
+class Game: NSObject {
     
-    static func vectorDirection(target: float2) -> Direction {
-        let compass = [
-            float2(0.0, 1.0),
-            float2(1.0, 0.0),
-            float2(0.0, -1.0),
-            float2(-1.0, 0.0),
-        ]
-        var max: Float = 0.0
-        var bestMatch = -1
-        for i in 0..<4 {
-            let dp = dot(normalize(target), compass[i])
-            if dp > max {
-                max = dp
-                bestMatch = i
-            }
-        }
-        
-        return Direction(rawValue: bestMatch) ?? .up
-    }
-}
-
-typealias Collision = (Bool, Direction, float2)
-
-class Game {
+    static var device: MTLDevice!
+    let commandQueue: MTLCommandQueue
+    
+    var effects: PostProcessor
+    
+    var aspectRatio: Float = 1.0
+    
+    var uniforms = Uniforms()
+    
+    let startDate = Date()
+    
     var state: GameState = .menu
     var keys: [GCKeyCode: Bool] = [:]
     var processedKeys: [GCKeyCode: Bool] = [:]
@@ -76,25 +66,43 @@ class Game {
     let particles: ParticleGenerator
     
     var shakeTime: Float = 0.0
-    var shake: Bool = false
     
-    var chaos: Bool = false
-    var confuse: Bool = false
+    lazy var camera: OrthographicCamera = {
+        let camera = OrthographicCamera(rect: Rectangle(left: 0, right: 800, top: 0, bottom: 600),
+                                        near: -1.0,
+                                        far: 1.0)
+        camera.position = [0, 0, 0]
+        
+        return camera
+    }()
     
     
-    
-    init(width: Int, height: Int, device: MTLDevice) {
-        self.width = width
-        self.height = height
+    init?(metalKitView: MTKView) {
+        guard let device = metalKitView.device,
+              let queue = device.makeCommandQueue() else { return nil }
+        Game.device = device
+        self.commandQueue = queue
+        
+        metalKitView.colorPixelFormat = .bgra8Unorm_srgb
+        metalKitView.depthStencilPixelFormat = .depth32Float
+        metalKitView.clearColor = MTLClearColor(red: 1.0,
+                                             green: 1.0,
+                                             blue: 0.8,
+                                             alpha: 1.0)
+        
+        effects = PostProcessor(metalKitView: metalKitView, width: 800, height: 600)
+        
+        self.width = 800
+        self.height = 600
         
         let font = Font.systemFont(ofSize: 24)
         
         textRenderer = TextRenderer(font: font)
-        textRenderer.createTexture(device: Renderer.device)
+        textRenderer.createTexture(device: Game.device)
         
-        self.background = try? Renderer.loadTexture(device: device, imageName: "background.jpg")
+        self.background = try? Game.loadTexture(device: device, imageName: "background.jpg")
         
-        self.sprites = try? Renderer.loadTexture(device: device, imageName: "spritesheet")
+        self.sprites = try? Game.loadTexture(device: device, imageName: "spritesheet")
         
         if let background = self.background {
             backgroundSprite = SpriteBatch(spriteTexture: background)
@@ -130,6 +138,8 @@ class Game {
         
         soundEngine.play2D(file: "audio/breakout.mp3", loop: true)
         
+        super.init()
+        
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name.GCKeyboardDidConnect,
             object: nil,
@@ -147,6 +157,9 @@ class Game {
                     print("Couldn't find keys")
                 }
             }
+        
+        
+        
     }
     
     func processInput(dt: Float) {
@@ -176,7 +189,7 @@ class Game {
         if state == .win {
             if keys[GCKeyCode.returnOrEnter] == true {
                 processedKeys[GCKeyCode.returnOrEnter] = true
-                chaos = false
+                effects.chaos = false
                 state = .menu
             }
         }
@@ -207,6 +220,84 @@ class Game {
         }
     }
     
+    static func loadTexture(device: MTLDevice, imageName: String) throws -> MTLTexture? {
+        let textureLoader = MTKTextureLoader(device: device)
+        
+        let textureLoaderOptions: [MTKTextureLoader.Option: Any] = [.origin: MTKTextureLoader.Origin.bottomLeft, .SRGB: true, .generateMipmaps: NSNumber(booleanLiteral: true)]
+        
+        let fileExtension = URL(fileURLWithPath: imageName).pathExtension.isEmpty ? "png" : nil
+        
+        guard let url = Bundle.main.url(forResource: imageName, withExtension: fileExtension) else {
+            print("Failed to load \(imageName)")
+            return try textureLoader.newTexture(name: imageName,
+                                                scaleFactor: 1.0,
+                                                bundle: Bundle.main,
+                                                options: nil)
+        }
+        
+        let texture = try textureLoader.newTexture(URL: url, options: textureLoaderOptions)
+        
+        print("loaded texture: \(url.lastPathComponent)")
+        
+        return texture
+    }
+}
+
+extension Game: MTKViewDelegate {
+    
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        /// Respond to drawable size or orientation changes here
+        
+        aspectRatio = Float(size.height) / Float(size.width)
+        
+        let rect = Rectangle(left: 0, right: 800, top: 0, bottom: 600)
+        camera.rect = rect
+        
+    }
+    
+    func draw(in view: MTKView) {
+        
+        let dt = 1.0 / Float(view.preferredFramesPerSecond)
+        processInput(dt: dt)
+        update(dt: dt)
+        
+        guard let commandBuffer = self.commandQueue.makeCommandBuffer() else {
+                  return
+              }
+        
+        
+        if let encoder = effects.beginRender(commandBuffer: commandBuffer) {
+            uniforms.projectionMatrix = camera.projectionMatrix
+            
+            renderGame(device: Game.device, uniforms: uniforms, renderEncoder: encoder)
+            
+            
+            effects.endRender(renderEncoder: encoder)
+        }
+        
+        if let descriptor = view.currentRenderPassDescriptor {
+            let time = Float(Date().timeIntervalSince(startDate))
+            
+            if let screenRenderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) {
+                effects.render(uniforms: uniforms, renderEncoder: screenRenderEncoder, dt: time)
+                
+                renderText(uniforms: uniforms, renderEncoder: screenRenderEncoder)
+                
+                screenRenderEncoder.endEncoding()
+            }
+            
+        }
+        
+        guard let drawable = view.currentDrawable else {
+            return
+        }
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+    }
+}
+
+
+extension Game {
     func update(dt: Float) {
         _ = ball.move(dt: dt, width: width)
         
@@ -222,7 +313,7 @@ class Game {
         if shakeTime > 0.0 {
             shakeTime -= dt
             if shakeTime < 0.0 {
-                shake = false
+                effects.shake = false
             }
         }
         
@@ -240,10 +331,10 @@ class Game {
         //do win state
         
     }
-    
-    func render(device: MTLDevice, uniforms: Uniforms, renderEncoder: MTLRenderCommandEncoder?) {
-        
-        textRenderer.start(uniforms: uniforms, renderEncoder: renderEncoder)
+}
+
+extension Game {
+    func renderGame(device: MTLDevice, uniforms: Uniforms, renderEncoder: MTLRenderCommandEncoder?) {
         
         if state == .active || state == .menu || state == .win {
             backgroundSprite?.start(uniforms: uniforms, renderEncoder: renderEncoder)
@@ -272,7 +363,18 @@ class Game {
                 ball.draw(spriteBatch: spriteBatch)
             }
             spriteBatch?.end()
-            
+        }
+        
+        
+        
+        
+        
+        
+    }
+    
+    func renderText(uniforms: Uniforms, renderEncoder: MTLRenderCommandEncoder?) {
+        textRenderer.start(uniforms: uniforms, renderEncoder: renderEncoder)
+        if state == .active || state == .menu || state == .win {
             textRenderer.renderText(text: "Lives: \(lives)", x: 5, y: 5, scale: 1, color: float4(1, 1, 1, 1), uniforms: uniforms, renderEncoder: renderEncoder)
         }
         
@@ -308,104 +410,7 @@ class Game {
     }
 }
 
-extension Game {
-    func doCollisions() {
-        for box in levels[level].bricks {
-            if !box.isDestroyed {
-                
-                let collision = checkCollision(one: ball, two: box)
-                if collision.0 {
-                    if !box.isSolid {
-                        box.isDestroyed = true
-                        spawnPowerUps(block: box)
-                        soundEngine.play2D(file: "audio/bleep.mp3", loop: false)
-                    } else {
-                        shakeTime = 0.05
-                        shake = true
-                        soundEngine.play2D(file: "audio/solid.wav", loop: false)
-                    }
-                    
-                    let direction = collision.1
-                    let diff = collision.2
-                    if !(ball.passThrough && !box.isSolid) {
-                        if direction == .left || direction == .right {
-                            ball.velocity.x = -ball.velocity.x
-                            let penetration = ball.radius - abs(diff.x)
-                            ball.position.x += direction == .left ? penetration : -penetration
-                        } else {
-                            ball.velocity.y = -ball.velocity.y
-                            let penetration = ball.radius - abs(diff.y)
-                            ball.position.y += direction == .up ? -penetration : penetration
-                        }
-                    }
-                }
-            }
-        }
-        
-        powerUps.forEach { powerUp in
-            if !powerUp.isDestroyed {
-                if powerUp.position.y >= Float(height) {
-                    powerUp.isDestroyed = true
-                }
-                if checkCollision(one: player, two: powerUp) {
-                    activatePowerUp(powerUp)
-                    powerUp.isDestroyed = true
-                    powerUp.activated = true
-                    soundEngine.play2D(file: "audio/powerup.wav", loop: false)
-                }
-            }
-        }
-        
-        let result = checkCollision(one: ball, two: player)
-        if !ball.stuck && result.0 {
-            let centreBoard = player.position.x + player.size.x / 2.0
-            let distance = (ball.position.x + ball.radius) - centreBoard
-            let percentage = distance / (playerSize.x / 2.0)
-            
-            let strength: Float = 2.0
-            let oldVelocity = ball.velocity
-            ball.velocity.x = initialBallVelocity.x * percentage * strength
-            ball.velocity.y = -ball.velocity.y
-            ball.velocity.y = -1.0 * abs(ball.velocity.y)
-            ball.velocity = normalize(ball.velocity) * length(oldVelocity)
-            
-            ball.stuck = ball.sticky
-            
-            soundEngine.play2D(file: "audio/bleep.wav", loop: false)
-        }
-    }
-    func checkCollision(one: GameObject, two: GameObject) -> Bool {
-        let collisionX = one.position.x + one.size.x >= two.position.x &&
-        two.position.x + two.size.x >= one.position.x
-        
-        let collisionY = one.position.y + one.size.y >= two.position.y && two.position.y + two.size.y >= one.position.y
-        
-        return collisionX && collisionY
-        
-    }
-    
-    func checkCollision(one: Ball, two: GameObject) -> Collision {
-        let centre = one.position + one.radius
-        let aabbHalfExtent = float2(two.size.x / 2.0, two.size.y / 2.0)
-        let aabbCentre = float2(two.position.x + aabbHalfExtent.x,
-                                two.position.y + aabbHalfExtent.y)
-        
-        var difference = centre - aabbCentre
-        let clamped = difference.clamped(lowerBound: -aabbHalfExtent, upperBound: aabbHalfExtent)
-        let closest = aabbCentre + clamped
-        difference = closest - centre
-        let len = length(difference)
-        if  len < one.radius {
-            return Collision(true, Direction.vectorDirection(target: difference), difference)
-        }
-        
-        return Collision(false, .up, difference)
-    }
-    
-    func clamp(value: Float, min: Float, max: Float) -> Float {
-        return Float.maximum(min, Float.minimum(max,value))
-    }
-}
+
 
 extension Game {
     func resetLevel() {
@@ -434,127 +439,8 @@ extension Game {
         ball.sticky = false
         player.color = float4(repeating: 1.0)
         ball.color = float4(repeating: 1.0)
-        chaos = false
-        confuse = false
+        effects.chaos = false
+        effects.confuse = false
     }
 }
-
-
-extension Game {
-    func spawnPowerUps(block: GameObject) {
-        if shouldSpawn(chance: 75) {
-            powerUps.append(PowerUp(type: .speed,
-                                    color: float4(0.5, 0.5, 1.0, 1.0),
-                                    duration: 0.0,
-                                    position: block.position))
-        }
-        
-        if shouldSpawn(chance: 75) {
-            powerUps.append(PowerUp(type: .sticky,
-                                    color: float4(1.0, 0.5, 1.0, 1.0),
-                                    duration: 2.0,
-                                    position: block.position))
-        }
-        
-        if shouldSpawn(chance: 75) {
-            powerUps.append(PowerUp(type: .passThrough,
-                                    color: float4(0.5, 1.0, 0.5, 1.0),
-                                    duration: 10.0,
-                                    position: block.position))
-        }
-        
-        if shouldSpawn(chance: 75) {
-            powerUps.append(PowerUp(type: .padSizeIncrease,
-                                    color: float4(1.0, 0.6, 0.4, 1.0),
-                                    duration: 0.0,
-                                    position: block.position))
-        }
-        
-        if shouldSpawn(chance: 15) {
-            powerUps.append(PowerUp(type: .confuse,
-                                    color: float4(1.0, 0.3, 0.3, 1.0),
-                                    duration: 15.0,
-                                    position: block.position))
-        }
-        
-        if shouldSpawn(chance: 15) {
-            powerUps.append(PowerUp(type: .chaos,
-                                    color: float4(0.9, 0.25, 0.25, 1.0),
-                                    duration: 15.0,
-                                    position: block.position))
-        }
-    }
-    
-    func updatePowerUps(dt: Float) {
-        powerUps.forEach { powerUp in
-            powerUp.position += powerUp.velocity * dt
-            if powerUp.activated {
-                powerUp.duration -= dt
-                if powerUp.duration <= 0.0 {
-                    powerUp.activated = false
-                    switch powerUp.type {
-                    case .sticky:
-                        if !isOtherPowerUpActive(type: .sticky) {
-                            ball.sticky = false
-                            player.color = float4(repeating: 1.0)
-                        }
-                    case .passThrough:
-                        if !isOtherPowerUpActive(type: .passThrough) {
-                            ball.passThrough = false
-                            player.color = float4(repeating: 1.0)
-                        }
-                    case .confuse:
-                        if !isOtherPowerUpActive(type: .confuse) {
-                            confuse = false
-                        }
-                    case .chaos:
-                        if !isOtherPowerUpActive(type: .chaos) {
-                            chaos = false
-                        }
-                    default:
-                        return
-                    }
-                }
-            }
-        }
-        
-        powerUps.removeAll { powerUp in
-            powerUp.isDestroyed && !powerUp.activated
-        }
-    }
-    
-    func isOtherPowerUpActive(type: PowerUpType) -> Bool {
-        for powerUp in powerUps {
-            if powerUp.activated, powerUp.type == type {
-                return true
-            }
-        }
-        return false
-    }
-    
-    func activatePowerUp(_ powerUP: PowerUp) {
-        switch powerUP.type {
-        case .speed:
-            ball.velocity *= 1.2
-        case .sticky:
-            ball.sticky = true
-            player.color = float4(1.0, 0.5, 1.0, 1.0)
-        case .passThrough:
-            ball.passThrough = true
-            ball.color = float4(1.0, 0.5, 0.5, 1.0)
-        case .padSizeIncrease:
-            player.size.x += 50
-        case .confuse:
-            confuse = true
-        case .chaos:
-            chaos = true
-        }
-    }
-    
-    func shouldSpawn(chance: UInt32) -> Bool {
-        let random = arc4random() % chance
-        return random == 0
-    }
-}
-
 

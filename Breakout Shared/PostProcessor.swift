@@ -67,8 +67,8 @@ class PostProcessor {
         depthTexDescriptor.usage = [.renderTarget]
         depthTexDescriptor.storageMode = .private
         
-        renderTargetTexture = Renderer.device.makeTexture(descriptor: texDescriptor)
-        depthTargetTexture = Renderer.device.makeTexture(descriptor: depthTexDescriptor)
+        renderTargetTexture = Game.device.makeTexture(descriptor: texDescriptor)
+        depthTargetTexture = Game.device.makeTexture(descriptor: depthTexDescriptor)
         
         texRenderPassDescriptor = MTLRenderPassDescriptor()
         texRenderPassDescriptor.colorAttachments[0].texture = renderTargetTexture
@@ -80,7 +80,7 @@ class PostProcessor {
         texRenderPassDescriptor.colorAttachments[0].storeAction = .store
         texRenderPassDescriptor.depthAttachment.texture = depthTargetTexture
         
-        self.depthStencilState = PostProcessor.buildDepthStencilState(device: Renderer.device)
+        self.depthStencilState = PostProcessor.buildDepthStencilState(device: Game.device)
         
         initRenderData(metalKitView: metalKitView)
     }
@@ -110,8 +110,11 @@ class PostProcessor {
         renderEncoder.endEncoding()
     }
     
-    func render(uniforms: Uniforms, commandBuffer: MTLCommandBuffer, descriptor: MTLRenderPassDescriptor,  dt: Float) {
-        if let screenRenderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) {
+    
+    
+
+    func render(uniforms: Uniforms, renderEncoder: MTLRenderCommandEncoder?,  dt: Float) {
+        if let screenRenderEncoder = renderEncoder {
             var uniforms = uniforms
             uniforms.blur_kernel = blur_kernel
             uniforms.offsets = offsets
@@ -141,12 +144,12 @@ class PostProcessor {
             
             screenRenderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
             
-            screenRenderEncoder.endEncoding()
+            
         }
     }
     
     func initRenderData(metalKitView: MTKView) {
-        let defaultLibrary = Renderer.device.makeDefaultLibrary()
+        let defaultLibrary = Game.device.makeDefaultLibrary()
         let vertProg = defaultLibrary?.makeFunction(name: "simpleVertexShader")
         let fragProg = defaultLibrary?.makeFunction(name: "simpleFragmentShader")
         
@@ -160,7 +163,7 @@ class PostProcessor {
         pipelineStateDescriptor.vertexBuffers[Int(AAPLVertexInputIndexVertices.rawValue)].mutability = .immutable
         
         do {
-            drawablePipeline = try Renderer.device.makeRenderPipelineState(descriptor: pipelineStateDescriptor)
+            drawablePipeline = try Game.device.makeRenderPipelineState(descriptor: pipelineStateDescriptor)
         } catch let error {
             fatalError(error.localizedDescription)
         }

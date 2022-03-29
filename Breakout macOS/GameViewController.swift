@@ -11,7 +11,7 @@ import AppKit
 // Our macOS specific view controller
 class GameViewController: NSViewController {
 
-    var renderer: Renderer!
+    var renderer: Game!
     var mtkView: MTKView!
 
     override func viewDidLoad() {
@@ -30,7 +30,7 @@ class GameViewController: NSViewController {
 
         mtkView.device = defaultDevice
 
-        guard let newRenderer = Renderer(metalKitView: mtkView) else {
+        guard let newRenderer = Game(metalKitView: mtkView) else {
             print("Renderer cannot be initialized")
             return
         }
